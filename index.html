@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Web Piano</title>
+    <!-- Load Tailwind CSS for utility classes and layout -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Load Tone.js for high-quality audio synthesis -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.min.js"></script>
+    <style>
+        /* Custom styles for the piano keys, overriding some Tailwind defaults */
+        :root {
+            --key-width: 60px;
+            --white-key-height: 250px;
+            --black-key-height: 150px;
+            --black-key-width: 35px;
+        }
+
+        .piano-keys {
+            display: flex;
+            position: relative;
+            padding: 20px;
+            background-color: #333;
+            border-radius: 12px;
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.5);
+            /* Ensure the piano fits well on mobile devices */
+            overflow-x: auto;
+        }
+
+        .key {
+            cursor: pointer;
+            transition: all 0.05s ease;
+            user-select: none;
+            position: relative;
+            border: 1px solid #000;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+            border-radius: 0 0 5px 5px;
+        }
+
+        /* WHITE KEYS */
+        .white-key {
+            width: var(--key-width);
+            height: var(--white-key-height);
+            background: linear-gradient(to bottom, #fff 90%, #eee 100%);
+            z-index: 1;
+            margin-right: 2px;
+        }
+
+        .white-key:active, .white-key.playing {
+            background: linear-gradient(to bottom, #ccc 90%, #ddd 100%);
+            transform: translateY(2px);
+            box-shadow: none;
+        }
+
+        /* BLACK KEYS */
+        .black-key {
+            width: var(--black-key-width);
+            height: var(--black-key-height);
+            background: linear-gradient(to bottom, #222 90%, #000 100%);
+            z-index: 2;
+            margin-left: calc(var(--black-key-width) / -2);
+            margin-right: calc(var(--black-key-width) / -2);
+            position: absolute;
+            top: 0;
+            left: 0; /* Managed by JS to position correctly */
+        }
+
+        .black-key:active, .black-key.playing {
+            background: #444;
+            transform: translateY(2px);
+            box-shadow: none;
+        }
+
+        /* Style for the keyboard key labels */
+        .key-label {
+            position: absolute;
+            bottom: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 0.8rem;
+            font-weight: bold;
+            color: #444;
+        }
+
+        .black-key .key-label {
+            color: #ddd;
+            font-size: 0.7rem;
+            bottom: 5px;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen flex flex-col items-center justify-center p-4 font-sans antialiased">
+
+    <!-- Header -->
+    <header class="text-center mb-8">
+        <h1 class="text-4xl font-extrabold text-gray-800">HTML/JS Piano</h1>
+        <p class="text-gray-600 mt-2">Click the keys or use your keyboard (A-J and W, E, T, Y, U).</p>
+        <div id="status" class="mt-4 text-sm font-medium text-red-600">
+            <!-- Audio context status message will appear here -->
+        </div>
+    </header>
+
+    <!-- Piano Container -->
+    <div class="piano-keys shadow-2xl">
+        <!-- The keys will be dynamically inserted here by JavaScript -->
+    </div>
+
+    <script>
+        // --- Firebase/Canvas Setup (Placeholder: Not used here as no persistence is required) ---
+        // const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        // const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+        // Note: For this simple app, no persistent storage is needed, so Firebase setup is skipped.
+
+        // --- Tone.js and Piano Logic ---
+
+        // Map keyboard keys to musical notes
+        const keyMap = {
+            // White keys (A-J on a QWERTY keyboard)
+            'a': 'C4',
+            's': 'D4',
+            'd': 'E4',
+            'f': 'F4',
+            'g': 'G4',
+            'h': 'A4',
+            'j': 'B4',
+            // Black keys (W, E, T, Y, U)
+            'w': 'C#4',
+            'e': 'D#4',
+            't': 'F#4',
+            'y': 'G#4',
+            'u': 'A#4'
+        };
+
+        const notes = [
+            { note: 'C4', key: 'a', type: 'white', pos: 0 },
+            { note: 'C#4', key: 'w', type: 'black' },
+            { note: 'D4', key: 's', type: 'white', pos: 1 },
+            { note: 'D#4', key: 'e', type: 'black' },
+            { note: 'E4', key: 'd', type: 'white', pos: 2 },
+            { note: 'F4', key: 'f', type: 'white', pos: 3 },
+            { note: 'F#4', key: 't', type: 'black' },
+            { note: 'G4', key: 'g', type: 'white', pos: 4 },
+            { note: 'G#4', key: 'y', type: 'black' },
+            { note: 'A4', key: 'h', type: 'white', pos: 5 },
+            { note: 'A#4', key: 'u', type: 'black' },
+            { note: 'B4', key: 'j', type: 'white', pos: 6 },
+            { note: 'C5', key: 'k', type: 'white', pos: 7 }, // One extra key for completeness
+        ];
+
+        let synth = null;
+        let isStarted = false;
+        const statusEl = document.getElementById('status');
+        const pianoContainer = document.querySelector('.piano-keys');
+
+        // Initial setup function
+        function initializeSynth() {
+            try {
+                // Tone.Synth is a basic polyphonic sine/square/triangle/saw wave synth
+                synth = new Tone.PolySynth(Tone.Synth, {
+                    oscillator: { type: "triangle" },
+                    envelope: {
+                        attack: 0.005,
+                        decay: 0.1,
+                        sustain: 0.3,
+                        release: 1
+                    }
+                }).toDestination(); // Connects the synth to the speakers
+
+                statusEl.textContent = 'Click any key to start the audio context!';
+            } catch (error) {
+                console.error("Failed to initialize Tone.js:", error);
+                statusEl.textContent = 'Error loading audio: ' + error.message;
+            }
+        }
+
+        // Function to create and append key elements to the DOM
+        function buildPiano() {
+            let whiteKeyCount = 0;
+            const keyWidth = 60; // From CSS variable
+            const blackKeyOffset = -30; // Half of black key width
+
+            notes.forEach(noteData => {
+                const keyEl = document.createElement('div');
+                keyEl.classList.add('key', `${noteData.type}-key`);
+                keyEl.setAttribute('data-note', noteData.note);
+                keyEl.setAttribute('data-key', noteData.key);
+                keyEl.id = `key-${noteData.key}`;
+
+                const labelEl = document.createElement('span');
+                labelEl.classList.add('key-label');
+                labelEl.textContent = `${noteData.note} (${noteData.key.toUpperCase()})`;
+                keyEl.appendChild(labelEl);
+
+                // For black keys, calculate position based on the previous white keys
+                if (noteData.type === 'black') {
+                    // Position the black key relative to the start of the previous white key
+                    // Position needs to be offset from the white key stack
+                    let totalWhiteWidths = whiteKeyCount * keyWidth;
+                    // Adjust by half a key width backwards to center it
+                    let leftOffset = totalWhiteWidths + blackKeyOffset;
+
+                    // Exclude position after E4 (D, which is white key pos 2) and B4 (J, which is white key pos 6)
+                    if (noteData.note === 'F4' || noteData.note === 'C5') {
+                        // This condition is handled implicitly by the note list order.
+                        // However, we need to correct the offset calculation to account for previous white keys
+                        // C#4 is after C4 (whiteKeyCount=1). D#4 is after D4 (whiteKeyCount=2).
+                        // F#4 is after F4 (whiteKeyCount=4). etc.
+
+                        // Since whiteKeyCount increments after the white key is processed,
+                        // and black keys are positioned relative to the *start* of the white keys,
+                        // this calculation should work:
+                        keyEl.style.left = `${leftOffset}px`;
+
+                    } else {
+                        keyEl.style.left = `${leftOffset}px`;
+                    }
+
+                } else {
+                    // White key positions are sequential in the DOM flow
+                    whiteKeyCount++;
+                }
+
+                pianoContainer.appendChild(keyEl);
+            });
+        }
+
+        // --- Interaction Handlers ---
+
+        function startAudioContext() {
+            if (!isStarted && synth) {
+                Tone.start();
+                isStarted = true;
+                statusEl.textContent = 'Audio Ready. Start playing!';
+                statusEl.classList.remove('text-red-600');
+                statusEl.classList.add('text-green-600');
+            }
+        }
+
+        // Plays a note and applies the 'playing' class
+        function playNote(note, keyElement) {
+            startAudioContext();
+            if (synth) {
+                // Trigger the attack (start playing)
+                synth.triggerAttack(note);
+                if (keyElement) {
+                    keyElement.classList.add('playing');
+                }
+            }
+        }
+
+        // Stops a note and removes the 'playing' class
+        function stopNote(note, keyElement) {
+            if (synth) {
+                // Trigger the release (stop playing)
+                synth.triggerRelease(note);
+                if (keyElement) {
+                    keyElement.classList.remove('playing');
+                }
+            }
+        }
+
+        // Set to track keys currently being held down to prevent re-triggering
+        const activeKeys = new Set();
+
+        // Handle mouse/touch events on the piano keys
+        pianoContainer.addEventListener('mousedown', (e) => {
+            const keyEl = e.target.closest('.key');
+            if (keyEl) {
+                const note = keyEl.getAttribute('data-note');
+                playNote(note, keyEl);
+                activeKeys.add(note);
+            }
+        });
+
+        pianoContainer.addEventListener('mouseup', (e) => {
+            const keyEl = e.target.closest('.key');
+            if (keyEl) {
+                const note = keyEl.getAttribute('data-note');
+                if (activeKeys.has(note)) {
+                    stopNote(note, keyEl);
+                    activeKeys.delete(note);
+                }
+            }
+        });
+
+        // Prevent unwanted continued note playing if mouse leaves while pressed
+        pianoContainer.addEventListener('mouseleave', () => {
+            activeKeys.forEach(note => {
+                stopNote(note, document.querySelector(`[data-note="${note}"]`));
+            });
+            activeKeys.clear();
+        });
+
+        // Handle keyboard input (keydown for attack)
+        document.addEventListener('keydown', (e) => {
+            const key = e.key.toLowerCase();
+            const note = keyMap[key];
+
+            if (note && !e.repeat && !activeKeys.has(note)) {
+                e.preventDefault();
+                const keyEl = document.getElementById(`key-${key}`);
+                playNote(note, keyEl);
+                activeKeys.add(note);
+            }
+        });
+
+        // Handle keyboard input (keyup for release)
+        document.addEventListener('keyup', (e) => {
+            const key = e.key.toLowerCase();
+            const note = keyMap[key];
+
+            if (note && activeKeys.has(note)) {
+                e.preventDefault();
+                const keyEl = document.getElementById(`key-${key}`);
+                stopNote(note, keyEl);
+                activeKeys.delete(note);
+            }
+        });
+
+        // Initialize on load
+        window.onload = function() {
+            initializeSynth();
+            buildPiano();
+        };
+
+    </script>
+</body>
+</html>
